@@ -248,16 +248,6 @@ docker exec swiftdeploy-nginx cat /var/log/nginx/access.log
 ./swiftdeploy teardown --clean
 ```
 
-## Beginner Explanation
-
-Think of `manifest.yaml` as the recipe.
-
-Think of `templates/` as reusable forms with blanks.
-
-Think of `swiftdeploy` as the tool that fills in the blanks and then tells Docker what to run.
-
-That is why the generated files should not be edited by hand. If you want to change the deployment, change `manifest.yaml`, then run:
-
 ```bash
 ./swiftdeploy init
 ```
