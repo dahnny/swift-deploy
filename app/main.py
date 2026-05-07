@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
@@ -18,6 +19,7 @@ REQUESTS = Counter(
     "Total HTTP requests",
     ["method", "path", "status_code"],
 )
+
 
 REQUEST_DURATION = Histogram(
     "http_request_duration_seconds",
@@ -51,26 +53,31 @@ def chaos_metric_value() -> int:
     return 0
 
 
-def apply_chaos_if_needed() -> None:
+def should_return_chaos_error() -> bool:
     if current_mode() != "canary":
-        return
+        return False
 
     if CHAOS["mode"] == "slow":
         time.sleep(float(CHAOS["duration"]))
     elif CHAOS["mode"] == "error":
         if random.random() < float(CHAOS["rate"]):
-            raise HTTPException(status_code=500, detail="simulated canary error")
+            return True
+
+    return False
 
 
 @app.middleware("http")
 async def canary_headers_and_chaos(request: Request, call_next):
     start = time.time()
 
-    if request.url.path != "/chaos":
-        apply_chaos_if_needed()
-
     status_code = "500"
     try:
+        if request.url.path != "/chaos" and should_return_chaos_error():
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "simulated canary error"},
+            )
+
         response = await call_next(request)
         status_code = str(response.status_code)
         if current_mode() == "canary":

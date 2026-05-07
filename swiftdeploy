@@ -906,7 +906,7 @@ def teardown(clean=False):
     result = run_command(compose + ["down", "-v", "--remove-orphans"], capture=False)
 
     if clean:
-        for path in (NGINX_CONF, COMPOSE_FILE):
+        for path in (NGINX_CONF, COMPOSE_FILE, AUDIT_REPORT, HISTORY_FILE):
             if path.exists():
                 path.unlink()
                 print(f"Deleted {path.name}")
