@@ -5,12 +5,30 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from pydantic import BaseModel, Field
 
 
 app = FastAPI(title="SwiftDeploy API")
-START_TIME = time.monotonic()
+START_TIME = time.time()
 CHAOS = {"mode": "recover", "duration": 0, "rate": 0.0}
+
+REQUESTS = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "path", "status_code"],
+)
+
+REQUEST_DURATION = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request duration in seconds",
+    ["method", "path"],
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+)
+
+APP_UPTIME = Gauge("app_uptime_seconds", "Application uptime in seconds")
+APP_MODE = Gauge("app_mode", "Application mode: 0=stable, 1=canary")
+CHAOS_ACTIVE = Gauge("chaos_active", "Chaos state: 0=none, 1=slow, 2=error")
 
 
 def current_mode() -> str:
@@ -23,6 +41,14 @@ def app_version() -> str:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def chaos_metric_value() -> int:
+    if CHAOS["mode"] == "slow":
+        return 1
+    if CHAOS["mode"] == "error":
+        return 2
+    return 0
 
 
 def apply_chaos_if_needed() -> None:
@@ -38,13 +64,24 @@ def apply_chaos_if_needed() -> None:
 
 @app.middleware("http")
 async def canary_headers_and_chaos(request: Request, call_next):
+    start = time.time()
+
     if request.url.path != "/chaos":
         apply_chaos_if_needed()
 
-    response = await call_next(request)
-    if current_mode() == "canary":
-        response.headers["X-Mode"] = "canary"
-    return response
+    status_code = "500"
+    try:
+        response = await call_next(request)
+        status_code = str(response.status_code)
+        if current_mode() == "canary":
+            response.headers["X-Mode"] = "canary"
+        return response
+    finally:
+        duration = time.time() - start
+        path = request.url.path
+        method = request.method
+        REQUESTS.labels(method=method, path=path, status_code=status_code).inc()
+        REQUEST_DURATION.labels(method=method, path=path).observe(duration)
 
 
 class ChaosRequest(BaseModel):
@@ -69,7 +106,7 @@ def healthz():
         "status": "ok",
         "mode": current_mode(),
         "version": app_version(),
-        "uptime_seconds": round(time.monotonic() - START_TIME, 2),
+        "uptime_seconds": round(time.time() - START_TIME, 2),
     }
 
 
@@ -91,3 +128,12 @@ def chaos(payload: ChaosRequest, response: Response):
 
     response.headers["X-Mode"] = "canary"
     return {"status": "updated", "chaos": CHAOS}
+
+
+@app.get("/metrics")
+def metrics():
+    APP_UPTIME.set(time.time() - START_TIME)
+    APP_MODE.set(1 if current_mode() == "canary" else 0)
+    CHAOS_ACTIVE.set(chaos_metric_value())
+
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
